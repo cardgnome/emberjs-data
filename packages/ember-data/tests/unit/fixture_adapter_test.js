@@ -4,7 +4,7 @@ var store, Person;
 module("DS.FixtureAdapter", {
   setup: function() {
     store = DS.Store.create({
-      adapter: 'DS.fixtureAdapter'
+      adapter: 'DS.FixtureAdapter'
     });
 
     Person = DS.Model.extend({
@@ -46,7 +46,7 @@ test("should load data for a type asynchronously when it is requested", function
 
   equal(get(ebryn, 'isLoaded'), false, "record from fixtures is returned in the loading state");
 
-  ebryn.addObserver('isLoaded', function() {
+  ebryn.then(function() {
     clearTimeout(timer);
     start();
 
@@ -56,7 +56,7 @@ test("should load data for a type asynchronously when it is requested", function
     stop();
 
     var wycats = store.find(Person, 'wycats');
-    wycats.addObserver('isLoaded', function() {
+    wycats.then(function() {
       clearTimeout(timer);
       start();
 
@@ -167,4 +167,44 @@ test("should follow isUpdating semantics", function() {
     start();
     ok(false, "timeout exceeded waiting for fixture data");
   }, 1000);
+});
+
+test("should coerce integer ids into string", function() {
+  stop();
+
+  Person.FIXTURES = [{
+    id: 1,
+    firstName: "Adam",
+    lastName: "Hawkins",
+    height: 65
+  }];
+
+  var result = Person.find("1");
+
+  result.then(function() {
+    clearTimeout(timer);
+    start();
+    clearTimeout(timer);
+    equal(get(result, 'id'), "1", "should load integer model id");
+  });
+
+  var timer = setTimeout(function() {
+    start();
+    ok(false, "timeout exceeded waiting for fixture data");
+  }, 1000);
+});
+
+test("should throw if ids are not defined in the FIXTURES", function() {
+
+  Person.FIXTURES = [{
+    firstName: "Adam",
+    lastName: "Hawkins",
+    height: 65
+  }];
+
+  raises(function(){
+    Person.find("1");
+  }, /the id property must be defined for fixture/);
+
+  
 });

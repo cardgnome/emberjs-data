@@ -1,24 +1,26 @@
+var none = Ember.isNone;
+
 /**
   DS.Transforms is a hash of transforms used by DS.Serializer.
 */
 DS.JSONTransforms = {
   string: {
     deserialize: function(serialized) {
-      return Ember.isNone(serialized) ? null : String(serialized);
+      return none(serialized) ? null : String(serialized);
     },
 
     serialize: function(deserialized) {
-      return Ember.isNone(deserialized) ? null : String(deserialized);
+      return none(deserialized) ? null : String(deserialized);
     }
   },
 
   number: {
     deserialize: function(serialized) {
-      return Ember.isNone(serialized) ? null : Number(serialized);
+      return none(serialized) ? null : Number(serialized);
     },
 
     serialize: function(deserialized) {
-      return Ember.isNone(deserialized) ? null : Number(deserialized);
+      return none(deserialized) ? null : Number(deserialized);
     }
   },
 
@@ -47,14 +49,22 @@ DS.JSONTransforms = {
   date: {
     deserialize: function(serialized) {
       var type = typeof serialized;
+      var date = null;
 
       if (type === "string" || type === "number") {
         // this is a fix for Safari 5.1.5 on Mac which does not accept timestamps as yyyy-mm-dd
-        if (type === "string" && serialized.search(/^\d{4}-\d{2}-\d{2}$/) !== -1){
+        if (type === "string" && serialized.search(/^\d{4}-\d{2}-\d{2}$/) !== -1) {
           serialized += "T00:00:00Z";
         }
 
-        return new Date(serialized);
+        date = new Date(serialized);
+
+        // this is a fix for IE8 which does not accept timestamps in ISO 8601 format
+        if (type === "string" && isNaN(date)) {
+          date = new Date(Date.parse(serialized.replace(/\-/ig, '/').replace(/Z$/, '').split('.')[0]));
+        }
+
+        return date;
       } else if (serialized === null || serialized === undefined) {
         // if the value is not present in the data,
         // return undefined, not null.

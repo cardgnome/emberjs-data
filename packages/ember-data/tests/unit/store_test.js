@@ -143,6 +143,11 @@ test("the error state", function() {
 
 module("DS.Store working with a DS.Adapter");
 
+test("RESTAdapter is default adapter for DS.Store", function () {
+  var currentStore = DS.Store.create();
+  ok(DS.RESTAdapter.detectInstance(currentStore.get('_adapter')), "Store's adapter is instance of RESTAdapter");
+});
+
 test("Calling Store#find invokes its adapter#find", function() {
   expect(4);
 
@@ -266,7 +271,7 @@ test("DS.Store loads individual records without explicit IDs with a custom prima
 */
 
 test("DS.Store passes only needed guids to findMany", function() {
-  expect(11);
+  expect(13);
 
   var adapter = TestAdapter.create({
     findMany: function(store, type, ids) {
@@ -285,6 +290,11 @@ test("DS.Store passes only needed guids to findMany", function() {
 
   equal(get(objects, 'length'), 6, "the RecordArray returned from findMany has all the objects");
   equal(get(objects, 'isLoaded'), false, "the RecordArrays' isLoaded flag is false");
+
+  objects.then(function(resolvedObjects) {
+    strictEqual(resolvedObjects, objects, "The promise is resolved with the RecordArray");
+    equal(get(objects, 'isLoaded'), true, "The objects are loaded");
+  });
 
   var i, object, hash;
   for (i=0; i<3; i++) {
@@ -306,7 +316,7 @@ test("DS.Store passes only needed guids to findMany", function() {
 });
 
 test("a findManys' isLoaded is true when all objects are loaded", function() {
-  expect(2);
+  expect(4);
 
   var adapter = TestAdapter.create({
     findMany: function(store, type, ids) {
@@ -323,6 +333,11 @@ test("a findManys' isLoaded is true when all objects are loaded", function() {
 
   var objects = currentStore.findMany(currentType, [1,2,3]);
 
+  objects.then(function(resolvedObjects) {
+    strictEqual(resolvedObjects, objects, "The resolved RecordArray is correct");
+    equal(get(objects, 'isLoaded'), true, "The RecordArray is loaded by the time the promise is resolved");
+  });
+
   equal(get(objects, 'length'), 3, "the RecordArray returned from findMany has all the objects");
   equal(get(objects, 'isLoaded'), true, "the RecordArrays' isLoaded flag is true");
 });
@@ -335,22 +350,6 @@ test("loadMany extracts ids from an Array of hashes if no ids are specified", fu
   store.loadMany(Person, array);
   equal(get(store.find(Person, 1), 'name'), "Scumbag Dale", "correctly extracted id for loaded data");
 });
-
-/*
-test("loadMany uses a model's primaryKey if one is provided to extract ids", function() {
-  var store = DS.Store.create();
-
-  var array = [{ key: 1, name: "Scumbag Dale" }, { key: 2, name: "Scumbag Katz" }, { key: 3, name: "Scumbag Bryn" }];
-
-  var Person = DS.Model.extend({
-    name: DS.attr('string'),
-    primaryKey: "key"
-  });
-
-  store.loadMany(Person, array);
-  equal(get(store.find(Person, 1), 'name'), "Scumbag Dale", "correctly extracted id for loaded data");
-});
-*/
 
 test("loadMany takes an optional Object and passes it on to the Adapter", function() {
   var passedQuery = { page: 1 };
@@ -393,12 +392,18 @@ test("all(type) returns a record array of all records of a specific type", funct
 });
 
 test("a new record of a particular type is created via store.createRecord(type)", function() {
+  expect(6);
   var store = DS.Store.create();
   var Person = DS.Model.extend({
     name: DS.attr('string')
   });
 
   var person = store.createRecord(Person);
+
+  person.then(function(resolvedPerson) {
+    strictEqual(resolvedPerson, person, "The promise is resolved with the record");
+    equal(get(person, 'isLoaded'), true, "The record is loaded");
+  });
 
   equal(get(person, 'isLoaded'), true, "A newly created record is loaded");
   equal(get(person, 'isNew'), true, "A newly created record is new");
@@ -410,12 +415,18 @@ test("a new record of a particular type is created via store.createRecord(type)"
 });
 
 test("an initial data hash can be provided via store.createRecord(type, hash)", function() {
+  expect(6);
   var store = DS.Store.create();
   var Person = DS.Model.extend({
     name: DS.attr('string')
   });
 
   var person = store.createRecord(Person, { name: "Brohuda Katz" });
+
+  person.then(function(resolvedPerson) {
+    strictEqual(resolvedPerson, person, "The promise is resolved with the record");
+    equal(get(person, 'isLoaded'), true, "The record is loaded");
+  });
 
   equal(get(person, 'isLoaded'), true, "A newly created record is loaded");
   equal(get(person, 'isNew'), true, "A newly created record is new");
@@ -469,12 +480,10 @@ test("records inside a collection view should have their ids updated", function(
 
 module("DS.State - Lifecycle Callbacks");
 
-test("a record receives a didLoad callback when it has finished loading", function() {
-  var callCount = 0;
-
+asyncTest("a record receives a didLoad callback when it has finished loading", function() {
   var Person = DS.Model.extend({
     didLoad: function() {
-      callCount++;
+      ok("The didLoad callback was called");
     }
   });
 
@@ -487,9 +496,12 @@ test("a record receives a didLoad callback when it has finished loading", functi
   var store = DS.Store.create({
     adapter: adapter
   });
-  store.find(Person, 1);
+  var person = store.find(Person, 1);
 
-  equal(callCount, 1, "didLoad callback was called once");
+  person.then(function(resolvedPerson) {
+    equal(resolvedPerson, person, "The resolved value is correct");
+    start();
+  });
 });
 
 test("a record receives a didUpdate callback when it has finished updating", function() {

@@ -1,13 +1,17 @@
 require("ember-data/system/model/states");
+require("ember-data/system/mixins/load_promise");
 
-var get = Ember.get, set = Ember.set, none = Ember.isNone;
+var LoadPromise = DS.LoadPromise; // system/mixins/load_promise
+
+var get = Ember.get, set = Ember.set, none = Ember.isNone, map = Ember.EnumerableUtils.map;
 
 var retrieveFromCurrentState = Ember.computed(function(key) {
   return get(get(this, 'stateManager.currentState'), key);
 }).property('stateManager.currentState');
 
-DS.Model = Ember.Object.extend(Ember.Evented, {
+DS.Model = Ember.Object.extend(Ember.Evented, LoadPromise, {
   isLoaded: retrieveFromCurrentState,
+  isReloading: retrieveFromCurrentState,
   isDirty: retrieveFromCurrentState,
   isSaving: retrieveFromCurrentState,
   isDeleted: retrieveFromCurrentState,
@@ -16,6 +20,7 @@ DS.Model = Ember.Object.extend(Ember.Evented, {
   isValid: retrieveFromCurrentState,
 
   clientId: null,
+  id: null,
   transaction: null,
   stateManager: null,
   errors: null,
@@ -38,6 +43,7 @@ DS.Model = Ember.Object.extend(Ember.Evented, {
   },
 
   didLoad: Ember.K,
+  didReload: Ember.K,
   didUpdate: Ember.K,
   didCreate: Ember.K,
   didDelete: Ember.K,
@@ -53,10 +59,11 @@ DS.Model = Ember.Object.extend(Ember.Evented, {
   }).property(),
 
   materializeData: function() {
-    this.setupData();
+    this.send('materializingData');
+
     get(this, 'store').materializeData(this);
 
-    this.suspendAssociationObservers(function() {
+    this.suspendRelationshipObservers(function() {
       this.notifyPropertyChange('data');
     });
   },
@@ -64,16 +71,19 @@ DS.Model = Ember.Object.extend(Ember.Evented, {
   _data: null,
 
   init: function() {
+    this._super();
+
     var stateManager = DS.StateManager.create({ record: this });
     set(this, 'stateManager', stateManager);
 
-    this.setup();
+    this._setup();
 
     stateManager.goToState('empty');
   },
 
-  setup: function() {
+  _setup: function() {
     this._relationshipChanges = {};
+    this._changesToSync = {};
   },
 
   send: function(name, context) {
@@ -101,6 +111,17 @@ DS.Model = Ember.Object.extend(Ember.Evented, {
     this.send('setProperty', { key: key, value: value, oldValue: oldValue });
   },
 
+  /**
+    Reload the record from the adapter.
+
+    This will only work if the record has already finished loading
+    and has not yet been modified (`isLoaded` but not `isDirty`,
+    or `isSaving`).
+  */
+  reload: function() {
+    this.send('reloadRecord');
+  },
+
   deleteRecord: function() {
     this.send('deleteRecord');
   },
@@ -112,7 +133,7 @@ DS.Model = Ember.Object.extend(Ember.Evented, {
   },
 
   clearRelationships: function() {
-    this.eachAssociation(function(name, relationship) {
+    this.eachRelationship(function(name, relationship) {
       if (relationship.kind === 'belongsTo') {
         set(this, name, null);
       } else if (relationship.kind === 'hasMany') {
@@ -124,13 +145,13 @@ DS.Model = Ember.Object.extend(Ember.Evented, {
   updateRecordArrays: function() {
     var store = get(this, 'store');
     if (store) {
-      store.dataWasUpdated(this.constructor, get(this, 'clientId'), this);
+      store.dataWasUpdated(this.constructor, get(this, '_reference'), this);
     }
   },
 
   /**
     If the adapter did not return a hash in response to a commit,
-    merge the changed attributes and associations into the existing
+    merge the changed attributes and relationships into the existing
     saved data.
   */
   adapterDidCommit: function() {
@@ -150,38 +171,42 @@ DS.Model = Ember.Object.extend(Ember.Evented, {
   },
 
   dataDidChange: Ember.observer(function() {
-    var associations = get(this.constructor, 'associationsByName'),
-        hasMany = get(this, 'data').hasMany, store = get(this, 'store'),
-        idToClientId = store.idToClientId,
-        cachedValue;
+    var relationships = get(this.constructor, 'relationshipsByName');
 
     this.updateRecordArraysLater();
 
-    associations.forEach(function(name, association) {
-      if (association.kind === 'hasMany') {
-        cachedValue = this.cacheFor(name);
-
-        if (cachedValue) {
-          var key = name,
-              ids = hasMany[key] || [];
-
-          var clientIds;
-
-          clientIds = Ember.EnumerableUtils.map(ids, function(id) {
-            return store.clientIdForId(association.type, id);
-          });
-
-          set(cachedValue, 'content', Ember.A(clientIds));
-        }
+    relationships.forEach(function(name, relationship) {
+      if (relationship.kind === 'hasMany') {
+        this.hasManyDidChange(relationship.key);
       }
     }, this);
+
+    this.send('finishedMaterializing');
   }, 'data'),
+
+  hasManyDidChange: function(key) {
+    var cachedValue = this.cacheFor(key);
+
+    if (cachedValue) {
+      var type = get(this.constructor, 'relationshipsByName').get(key).type;
+      var store = get(this, 'store');
+      var ids = this._data.hasMany[key] || [];
+
+      var references = map(ids, function(id) {
+        // if it was already a reference, return the reference
+        if (typeof id === 'object') { return id; }
+        return store.referenceForId(type, id);
+      });
+
+      set(cachedValue, 'content', Ember.A(references));
+    }
+  },
 
   updateRecordArraysLater: function() {
     Ember.run.once(this, this.updateRecordArrays);
   },
 
-  setupData: function() {
+  setupData: function(prematerialized) {
     this._data = {
       attributes: {},
       belongsTo: {},
@@ -212,10 +237,10 @@ DS.Model = Ember.Object.extend(Ember.Evented, {
   },
 
   rollback: function() {
-    this.setup();
+    this._setup();
     this.send('becameClean');
 
-    this.suspendAssociationObservers(function() {
+    this.suspendRelationshipObservers(function() {
       this.notifyPropertyChange('data');
     });
   },
@@ -238,19 +263,19 @@ DS.Model = Ember.Object.extend(Ember.Evented, {
     better infrastructure for suspending groups of observers, and if Array
     observation becomes more unified with regular observers.
   */
-  suspendAssociationObservers: function(callback, binding) {
-    var observers = get(this.constructor, 'associationNames').belongsTo;
+  suspendRelationshipObservers: function(callback, binding) {
+    var observers = get(this.constructor, 'relationshipNames').belongsTo;
     var self = this;
 
     try {
-      this._suspendedAssociations = true;
+      this._suspendedRelationships = true;
       Ember._suspendObservers(self, observers, null, 'belongsToDidChange', function() {
         Ember._suspendBeforeObservers(self, observers, null, 'belongsToWillChange', function() {
           callback.call(binding || self);
         });
       });
     } finally {
-      this._suspendedAssociations = false;
+      this._suspendedRelationships = false;
     }
   },
 
@@ -276,31 +301,9 @@ DS.Model = Ember.Object.extend(Ember.Evented, {
     this.updateRecordArraysLater();
   },
 
-  adapterDidUpdateHasMany: function(name) {
-    var cachedValue = this.cacheFor(name),
-        hasMany = get(this, 'data').hasMany,
-        store = get(this, 'store');
-
-    var associations = get(this.constructor, 'associationsByName'),
-        association = associations.get(name),
-        idToClientId = store.idToClientId;
-
-    if (cachedValue) {
-      var key = name,
-          ids = hasMany[key] || [];
-
-      var clientIds;
-
-      clientIds = Ember.EnumerableUtils.map(ids, function(id) {
-        return store.clientIdForId(association.type, id);
-      });
-
-      set(cachedValue, 'content', Ember.A(clientIds));
-      set(cachedValue, 'isLoaded', true);
-    }
-
-    this.updateRecordArraysLater();
-  },
+  _reference: Ember.computed(function() {
+    return get(this, 'store').referenceForClientId(get(this, 'clientId'));
+  }),
 
   adapterDidInvalidate: function(errors) {
     this.send('becameInvalid', errors);

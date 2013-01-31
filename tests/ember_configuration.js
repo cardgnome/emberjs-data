@@ -87,6 +87,8 @@
       loadMany: syncForTest(),
       filter: syncForTest(),
       find: syncForTest(),
+      findByClientId: syncForTest(),
+      findMany: syncForTest(),
       didSaveRecord: syncForTest(),
       didSaveRecords: syncForTest(),
       didUpdateAttribute: syncForTest(),
@@ -96,9 +98,14 @@
     });
 
     DS.Model.reopen({
+      then: syncForTest(),
       deleteRecord: syncForTest(),
       dataDidChange: Ember.observer(syncForTest(), 'data'),
       updateRecordArraysLater: syncForTest()
+    });
+
+    DS.RecordArray.reopen({
+      then: syncForTest()
     });
 
     DS.Transaction.reopen({
