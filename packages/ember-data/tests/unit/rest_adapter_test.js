@@ -1,6 +1,6 @@
 var get = Ember.get, set = Ember.set;
 
-var adapter, store, ajaxUrl, ajaxType, ajaxHash;
+var adapter, store, serializer, ajaxUrl, ajaxType, ajaxHash;
 var Person, person, people;
 var Role, role, roles;
 var Group, group;
@@ -11,7 +11,12 @@ module("the REST adapter", {
     ajaxType = undefined;
     ajaxHash = undefined;
 
-    adapter = DS.RESTAdapter.create({
+    var Adapter = DS.RESTAdapter.extend();
+    Adapter.configure('plurals', {
+      person: 'people'
+    });
+
+    adapter = Adapter.create({
       ajax: function(url, type, hash) {
         var success = hash.success, self = this;
 
@@ -24,12 +29,10 @@ module("the REST adapter", {
             success.call(self, json);
           };
         }
-      },
-
-      plurals: {
-        person: 'people'
       }
     });
+
+    serializer = get(adapter, 'serializer');
 
     store = DS.Store.create({
       adapter: adapter
@@ -42,6 +45,10 @@ module("the REST adapter", {
     Person.toString = function() {
       return "App.Person";
     };
+
+    serializer.configure(Person, {
+      sideloadAs: "people"
+    });
 
     Group = DS.Model.extend({
       name: DS.attr('string'),
@@ -57,8 +64,7 @@ module("the REST adapter", {
     });
 
     Role = DS.Model.extend({
-      name: DS.attr('string'),
-      primaryKey: '_id'
+      name: DS.attr('string')
     });
 
     Role.toString = function() {
@@ -122,9 +128,9 @@ test("creating a person makes a POST to /people, with the data hash", function()
 });
 
 test("singular creations can sideload data", function() {
-  adapter.mappings = {
-    groups: Group
-  };
+  serializer.configure(Group, {
+    sideloadAs: 'groups'
+  });
 
   person = store.createRecord(Person, { name: "Tom Dale" });
 
@@ -200,9 +206,7 @@ test("updates are not required to return data", function() {
 });
 
 test("singular updates can sideload data", function() {
-  adapter.mappings = {
-    groups: Group
-  };
+  serializer.configure(Group, { sideloadAs: 'groups' });
 
   store.load(Person, { id: 1, name: "Yehuda Katz" });
 
@@ -234,20 +238,6 @@ test("singular updates can sideload data", function() {
   equal(get(group, 'name'), "Group 1", "the data sideloaded successfully");
 });
 
-/*
-test("updating a record with custom primaryKey", function() {
-  store.load(Role, { _id: 1, name: "Developer" });
-
-  role = store.find(Role, 1);
-
-  set(role, 'name', "Manager");
-  store.commit();
-
-  expectUrl("/roles/1", "the plural of the model name with its ID");
-  ajaxHash.success({ role: { _id: 1, name: "Manager" } });
-});
-*/
-
 test("deleting a person makes a DELETE to /people/:id", function() {
   store.load(Person, { id: 1, name: "Tom Dale" });
 
@@ -272,9 +262,7 @@ test("deleting a person makes a DELETE to /people/:id", function() {
 });
 
 test("singular deletes can sideload data", function() {
-  adapter.mappings = {
-    groups: Group
-  };
+  serializer.configure(Group, { sideloadAs: 'groups' });
 
   store.load(Person, { id: 1, name: "Tom Dale" });
 
@@ -361,7 +349,7 @@ test("finding all people with since makes a GET to /people", function() {
   expectUrl("/people", "the plural of the model name");
   expectType("GET");
 
-  ajaxHash.success({ meta: {since: '123'}, people: [{ id: 1, name: "Yehuda Katz" }] });
+  ajaxHash.success({ meta: { since: '123'}, people: [{ id: 1, name: "Yehuda Katz" }] });
 
   people = store.find(Person);
 
@@ -369,7 +357,7 @@ test("finding all people with since makes a GET to /people", function() {
   expectType("GET");
   expectData({since: '123'});
 
-  ajaxHash.success({ meta: {since: '1234'}, people: [{ id: 2, name: "Paul Chavard" }] });
+  ajaxHash.success({ meta: { since: '1234'}, people: [{ id: 2, name: "Paul Chavard" }] });
 
   person = people.objectAt(1);
 
@@ -384,14 +372,18 @@ test("finding all people with since makes a GET to /people", function() {
   expectType("GET");
   expectData({since: '1234'});
 
-  ajaxHash.success({ meta: {since: '12345'}, people: [{ id: 3, name: "Dan Gebhardt" }] });
+  ajaxHash.success({ meta: { since: '12345'}, people: [{ id: 3, name: "Dan Gebhardt" }] });
 
   equal(people.get('length'), 3, 'should have 3 records now');
 });
 
 test("meta and since are configurable", function() {
-  store.set('_adapter.meta', 'metaObject');
-  store.set('_adapter.since', 'sinceToken');
+  serializer.configure({
+    meta: 'metaObject',
+    since: 'sinceToken'
+  });
+
+  set(adapter, 'since', 'lastToken');
 
   people = store.find(Person);
 
@@ -404,7 +396,7 @@ test("meta and since are configurable", function() {
 
   expectUrl("/people", "the plural of the model name");
   expectType("GET");
-  expectData({sinceToken: '123'});
+  expectData({lastToken: '123'});
 
   ajaxHash.success({ metaObject: {sinceToken: '1234'}, people: [{ id: 2, name: "Paul Chavard" }] });
 
@@ -459,7 +451,7 @@ test("additional data can be sideloaded in a GET", function() {
   });
 
   equal(get(store.find(Person, 1), 'name'), "Yehuda Katz", "the items are sideloaded");
-  equal(get(get(store.find(Group, 1), 'people').objectAt(0), 'name'), "Yehuda Katz", "the items are in the association");
+  equal(get(get(store.find(Group, 1), 'people').objectAt(0), 'name'), "Yehuda Katz", "the items are in the relationship");
 });
 
 test("finding many people by a list of IDs", function() {
@@ -471,7 +463,7 @@ test("finding many people by a list of IDs", function() {
 
   var people = get(group, 'people');
 
-  equal(get(people, 'length'), 3, "there are three people in the association already");
+  equal(get(people, 'length'), 3, "there are three people in the relationship already");
 
   people.forEach(function(person) {
     equal(get(person, 'isLoaded'), false, "the person is being loaded");
@@ -689,7 +681,7 @@ test("bulk commits can sideload data", function() {
   var tom = store.createRecord(Person, { name: "Tom Dale" });
   var yehuda = store.createRecord(Person, { name: "Yehuda Katz" });
 
-  adapter.mappings = { groups: Group };
+  serializer.configure(Group, { sideloadAs: 'groups' });
 
   people = [ tom, yehuda ];
 
@@ -757,9 +749,7 @@ test("updating several people (with bulkCommit) makes a PUT to /people/bulk with
 test("bulk updates can sideload data", function() {
   set(adapter, 'bulkCommit', true);
 
-  adapter.mappings = {
-    groups: Group
-  };
+  serializer.configure(Group, { sideloadAs: 'groups' });
 
   store.loadMany(Person, [
     { id: 1, name: "Yehuda Katz" },
@@ -842,9 +832,7 @@ test("deleting several people (with bulkCommit) makes a PUT to /people/bulk", fu
 test("bulk deletes can sideload data", function() {
   set(adapter, 'bulkCommit', true);
 
-  adapter.mappings = {
-    groups: Group
-  };
+  serializer.configure(Group, { sideloadAs: 'groups' });
 
   store.loadMany(Person, [
     { id: 1, name: "Yehuda Katz" },
@@ -904,7 +892,7 @@ test("sideloaded data is loaded prior to primary data (to ensure relationship co
   expect(1);
 
   group = store.find(Group, 1);
-  group.on("didLoad", function() {
+  group.then(function(group) {
     equal(group.get('people.firstObject').get('name'), "Tom Dale", "sideloaded data are already loaded");
   });
 
@@ -916,12 +904,12 @@ test("sideloaded data is loaded prior to primary data (to ensure relationship co
   });
 });
 
-test("additional data can be sideloaded with associations in correct order", function() {
+test("additional data can be sideloaded with relationships in correct order", function() {
   var Comment = DS.Model.extend({
     person: DS.belongsTo(Person)
   });
 
-  store.adapter.mappings = {'comments': Comment};
+  serializer.configure(Comment, { sideloadAs: 'comments' });
 
   var comments = store.filter(Comment, function(data) {
     equal(store.find(Comment, data.get('id')).get('person.id'), 1);
